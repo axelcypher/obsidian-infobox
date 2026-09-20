@@ -20,6 +20,14 @@ function createClassList(initial = '') {
         },
         contains(name) {
             return classes.has(name);
+        },
+        toggle(name, force) {
+            if (force === undefined) {
+                if (classes.has(name)) { classes.delete(name); return false; }
+                else { classes.add(name); return true; }
+            }
+            if (force) { classes.add(name); return true; }
+            else { classes.delete(name); return false; }
         }
     };
 }
@@ -51,6 +59,11 @@ class TestElement {
 
     addClass(name) {
         this.classList.add(name);
+    }
+
+    addEventListener(eventName, callback) {
+        this.listeners = this.listeners || {};
+        this.listeners[eventName] = callback;
     }
 
     closest(selector) {
@@ -113,8 +126,9 @@ plugin.processLeaf({
     }
 });
 
+assert(container.classList.contains('has-infobox'), 'container should have has-infobox class');
+assert(cmSizer.children.some(child => child.cls === 'infobox-panel'), 'readable sizer should host the panel');
 assert(cmSizer.classList.contains('infobox-readable-host'));
-assert(cmSizer.children.some(child => child.cls === 'infobox-panel'));
-assert(!container.children.some(child => child.cls === 'infobox-panel'));
+assert(!require('fs').readFileSync(require('path').join(__dirname, '../styles.css'), 'utf8').includes('padding-right: 300px'));
 
 console.log('infobox-layout tests passed');
