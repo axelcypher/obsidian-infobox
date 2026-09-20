@@ -209,7 +209,7 @@ class InfoboxEditModal extends Modal {
         this.setTitle('Edit Infobox');
         this.file = file;
         this.currentData = currentData;
-        this.debouncedSave = debounce(this.updateYaml.bind(this), 300, true);
+        this.debouncedSave = debounce(this.saveDetails.bind(this), 300, true);
         this.debouncedSaveFields = debounce(this.saveFields.bind(this), 300, true);
         this.debouncedSaveGallery = debounce(this.saveGallery.bind(this), 300, true);
         this.debouncedSaveTags = debounce(this.saveTags.bind(this), 300, true);
@@ -218,6 +218,21 @@ class InfoboxEditModal extends Modal {
         this.draggedImageIndex = null;
         this.boundHandleKeyDown = this.handleKeyDown.bind(this);
         this.boundHandlePaste = this.handlePaste.bind(this);
+    }
+
+    normalizeInlineValue(value) {
+        return InfoboxPlugin.prototype.normalizeInlineValue.call(this, value);
+    }
+
+    async saveDetails() {
+        const details = { ...this.currentData };
+        await this.app.fileManager.processFrontMatter(this.file, frontmatter => {
+            if (!frontmatter.infobox) frontmatter.infobox = {};
+            for (const key of ['supertitle', 'title', 'subtitle']) {
+                if (details[key] === '' || details[key] == null) delete frontmatter.infobox[key];
+                else frontmatter.infobox[key] = details[key];
+            }
+        });
     }
 
     async updateYaml(key, value) {
@@ -459,6 +474,7 @@ class InfoboxEditModal extends Modal {
             if (!item || typeof item !== 'object') return;
             const key = Object.keys(item)[0];
             const val = item[key];
+            if (!key) return;
             const isSection = key.toLowerCase() === 'section';
             const rowCls = isSection
                 ? 'infobox-edit-field-row is-section'
@@ -592,7 +608,7 @@ class InfoboxEditModal extends Modal {
                     }
                 });
                 valInput.value = Array.isArray(val)
-                    ? val.map(item => this.normalizeInlineValue(item)).join('\n')
+                    ? val.map(item => `- ${this.normalizeInlineValue(item)}`).join('\n')
                     : (val ?? '');
                 valInput.addEventListener('dragstart', e => e.stopPropagation());
 
@@ -902,6 +918,27 @@ class InfoboxEditModal extends Modal {
             }
         });
 
+        const suggestions = inputRow.createEl('datalist');
+        suggestions.id = `infobox-tag-suggestions-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        tagInput.setAttribute('list', suggestions.id);
+        const knownTags = new Set();
+        const collectTags = value => {
+            const values = Array.isArray(value) ? value : String(value || '').split(/[\s,]+/);
+            values.forEach(value => {
+                const tag = String(value).trim().replace(/^#+/, '');
+                if (tag && !tags.includes(tag)) knownTags.add(tag);
+            });
+        };
+        for (const file of this.app.vault.getMarkdownFiles()) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            collectTags(cache?.frontmatter?.tags);
+            collectTags(cache?.frontmatter?.infobox?.tags);
+            for (const entry of cache?.tags || []) collectTags(entry.tag);
+        }
+        Array.from(knownTags).sort((a, b) => a.localeCompare(b)).forEach(tag => {
+            suggestions.createEl('option', { value: tag });
+        });
+
         const addTag = () => {
             const val = tagInput.value.trim().replace(/^#+/, '').replace(/,+$/, '');
             if (!val) return;
@@ -1042,6 +1079,33 @@ class InfoboxEditModal extends Modal {
             attr: { 'aria-label': 'Add label', type: 'button' }
         });
         addLabelBtn.addEventListener('click', () => this.addField({ 'New label': 'Value' }));
+
+        const footer = contentEl.createDiv({ cls: 'infobox-edit-footer' });
+        const saveStatus = footer.createEl('span', { attr: { role: 'status' } });
+        const saveBtn = footer.createEl('button', {
+            text: 'Save',
+            cls: 'mod-cta',
+            attr: { type: 'button', 'aria-label': 'Save infobox' }
+        });
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            saveStatus.textContent = 'Saving...';
+            for (const save of [this.debouncedSave, this.debouncedSaveFields,
+                this.debouncedSaveGallery, this.debouncedSaveTags]) {
+                save.cancel?.();
+            }
+            try {
+                await this.saveDetails();
+                await this.saveFields();
+                await this.saveGallery();
+                await this.saveTags();
+                this.close();
+            } catch (error) {
+                console.error('[Infobox] Save failed', error);
+                saveStatus.textContent = 'Could not save. Please try again.';
+                saveBtn.disabled = false;
+            }
+        });
     }
 
     onClose() {
@@ -1137,6 +1201,7 @@ class InfoboxPlugin extends Plugin {
         if (this._pending != null) cancelAnimationFrame(this._pending);
         document.querySelectorAll('.infobox-panel').forEach(e => e.remove());
         document.querySelectorAll('.has-infobox').forEach(e => e.classList.remove('has-infobox'));
+        document.querySelectorAll('.infobox-readable-host').forEach(e => e.classList.remove('infobox-readable-host'));
     }
 
     scheduleRefresh() {
@@ -1387,6 +1452,7 @@ class InfoboxPlugin extends Plugin {
         // Always clean up first
         ct.querySelectorAll('.infobox-panel').forEach(e => e.remove());
         ct.classList.remove('has-infobox');
+        ct.querySelectorAll('.infobox-readable-host').forEach(e => e.classList.remove('infobox-readable-host'));
 
         const file = view.file;
         if (!file) return;
@@ -1688,18 +1754,29 @@ class InfoboxPlugin extends Plugin {
 
         // Edit button
         const editBtn = panel.createEl('button', {
-            text: 'Edit',
             cls: 'infobox-edit-button',
             attr: {
                 'aria-label': 'Edit infobox',
+                title: 'Edit infobox',
                 type: 'button'
             }
         });
+        obsidian.setIcon?.(editBtn, 'pencil');
         editBtn.addEventListener('click', () => {
             new InfoboxEditModal(this.app, file, JSON.parse(JSON.stringify(ib))).open();
         });
 
-        ct.appendChild(panel);
+        const contentSizer = ct.querySelector('.markdown-preview-sizer, .cm-sizer');
+        const readableContainer = contentSizer?.closest('.is-readable-line-width') ||
+            ct.closest('.is-readable-line-width') ||
+            view.contentEl?.closest('.is-readable-line-width');
+        if (contentSizer && readableContainer) {
+            contentSizer.classList.add('infobox-readable-host');
+            panel.classList.add('infobox-panel-readable');
+            contentSizer.appendChild(panel);
+        } else {
+            ct.appendChild(panel);
+        }
         ct.classList.add('has-infobox');
     }
 }

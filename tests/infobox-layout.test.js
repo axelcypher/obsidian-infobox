@@ -127,6 +127,8 @@ plugin.processLeaf({
 });
 
 assert(container.classList.contains('has-infobox'), 'container should have has-infobox class');
-assert(container.children.some(child => child.cls === 'infobox-panel'), 'container should contain infobox-panel');
+assert(cmSizer.children.some(child => child.cls === 'infobox-panel'), 'readable sizer should host the panel');
+assert(cmSizer.classList.contains('infobox-readable-host'));
+assert(!require('fs').readFileSync(require('path').join(__dirname, '../styles.css'), 'utf8').includes('padding-right: 300px'));
 
 console.log('infobox-layout tests passed');

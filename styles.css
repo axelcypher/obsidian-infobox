@@ -36,10 +36,18 @@ live edit/reading mode compatibility */
 
 }
 
-/* Push text content left so it doesn't hide behind the panel */
-.has-infobox .markdown-preview-sizer,
-.has-infobox .cm-sizer {
-    padding-right: 300px;
+/* Place the panel in the readable text gutter without shrinking the note. */
+.infobox-panel.infobox-panel-readable {
+    top: 0;
+    right: auto;
+    left: calc(100% + 24px);
+    max-height: calc(100vh - 96px);
+}
+
+.has-infobox .markdown-preview-sizer.infobox-readable-host,
+.has-infobox .cm-sizer.infobox-readable-host {
+    position: relative;
+    overflow: visible;
 }
 
 #infobox-edit-modal .modal-content {
@@ -271,20 +279,28 @@ button.infobox-image-tab.is-active {
 
 
 /* ── Edit Button ────────────────────────────────────────────── */
-/* considering changing this to a smaller button? or maybe an option
-in the config settings */
 .infobox-edit-button {
-    width: calc(100% - 32px);
-    margin: 16px;
-    padding: 6px 12px;
-    background-color: var(--interactive-normal);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 6px;
-    color: var(--text-normal);
-    font-size: 0.9em;
-    font-weight: 600;
+    align-self: flex-end;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    margin: 4px 0 0;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 4px;
+    color: var(--text-muted);
     cursor: pointer;
     transition: background-color 0.2s ease;
+}
+
+.infobox-edit-button svg {
+    width: 16px;
+    height: 16px;
 }
 
 .infobox-edit-button:hover {
@@ -436,6 +452,21 @@ in the config settings */
 }
 
 /* Gallery editor in modal */
+.infobox-edit-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.infobox-edit-footer [role="status"] {
+    font-size: var(--font-ui-small);
+    color: var(--text-muted);
+}
+
 .infobox-edit-gallery-item {
     display: flex;
     flex-direction: column;
