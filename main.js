@@ -40,6 +40,63 @@ function repairWikilinkFrontmatter(source) {
     return match[1] + repaired + match[3] + source.slice(match[0].length);
 }
 
+function extractFootnoteDefinitions(source) {
+    const definitions = new Map();
+    if (typeof source !== 'string' || !source) return definitions;
+
+    const lines = source.replace(/\r\n?/g, '\n').split('\n');
+    let inFence = false;
+    let fenceMarker = '';
+
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        const fence = line.match(/^\s*(`{3,}|~{3,})/);
+        if (fence) {
+            const marker = fence[1][0];
+            if (!inFence) {
+                inFence = true;
+                fenceMarker = marker;
+            } else if (marker === fenceMarker) {
+                inFence = false;
+                fenceMarker = '';
+            }
+            continue;
+        }
+        if (inFence) continue;
+
+        const start = line.match(/^ {0,3}\[\^([^\]\r\n]+)\]:[ \t]*(.*)$/);
+        if (!start) continue;
+
+        const label = start[1].trim();
+        const content = [start[2]];
+        let lookahead = index + 1;
+
+        while (lookahead < lines.length) {
+            const continuation = lines[lookahead].match(/^(?: {2,}|\t)(.*)$/);
+            if (continuation) {
+                content.push(continuation[1]);
+                lookahead++;
+                continue;
+            }
+
+            if (lines[lookahead].trim() === '') {
+                const next = lines[lookahead + 1];
+                if (typeof next === 'string' && /^(?: {2,}|\t)/.test(next)) {
+                    content.push('');
+                    lookahead++;
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if (label) definitions.set(label, content.join('\n').trim());
+        index = lookahead - 1;
+    }
+
+    return definitions;
+}
+
 /*
  * Infobox plugin — reads structured data from YAML frontmatter and renders
  * a Wikipedia-style panel pinned to the right side of the reading pane.
@@ -1172,12 +1229,17 @@ class ImageSuggestModal extends FuzzySuggestModal {
 class InfoboxPlugin extends Plugin {
     _pending = null;
     _repairRequests = new WeakMap();
+    _footnoteDefinitions = new Map();
+    _footnoteReads = new Map();
 
     async onload() {
         const r = () => this.scheduleRefresh();
         this.registerEvent(this.app.workspace.on('layout-change', r));
         this.registerEvent(this.app.workspace.on('active-leaf-change', r));
-        this.registerEvent(this.app.metadataCache.on('changed', r));
+        this.registerEvent(this.app.metadataCache.on('changed', file => {
+            if (file?.path) this._footnoteDefinitions.delete(file.path);
+            r();
+        }));
         this.registerEvent(this.app.workspace.on('css-change', r));
         this.app.workspace.onLayoutReady(r);
 
@@ -1231,6 +1293,8 @@ class InfoboxPlugin extends Plugin {
 
     onunload() {
         this._repairRequests = new WeakMap();
+        this._footnoteDefinitions.clear();
+        this._footnoteReads.clear();
         if (this._pending != null) cancelAnimationFrame(this._pending);
         document.querySelectorAll('.infobox-panel').forEach(e => e.remove());
         document.querySelectorAll('.has-infobox').forEach(e => e.classList.remove('has-infobox'));
@@ -1343,6 +1407,43 @@ class InfoboxPlugin extends Plugin {
         return String(value);
     }
 
+    resolveFootnoteReferences(value, definitions) {
+        const text = this.normalizeInlineValue(value);
+        if (!(definitions instanceof Map) || definitions.size === 0) return text;
+
+        return text.replace(/\[\^([^\]\r\n]+)\]/g, (reference, rawLabel) => {
+            const label = rawLabel.trim();
+            return definitions.has(label) ? definitions.get(label) : reference;
+        });
+    }
+
+    getFootnoteDefinitions(file, view, request) {
+        const editorSource = view?.editor?.getValue?.();
+        if (typeof editorSource === 'string') {
+            const definitions = extractFootnoteDefinitions(editorSource);
+            this._footnoteDefinitions.set(file.path, definitions);
+            return definitions;
+        }
+
+        const cached = this._footnoteDefinitions.get(file.path);
+        if (cached) return cached;
+
+        if (!this._footnoteReads.has(file.path) && this.app?.vault?.cachedRead) {
+            const read = this.app.vault.cachedRead(file)
+                .then(source => {
+                    this._footnoteDefinitions.set(file.path, extractFootnoteDefinitions(source));
+                    if (this._repairRequests.get(view.containerEl) === request) {
+                        this.scheduleRefresh();
+                    }
+                })
+                .catch(error => console.error('[Infobox] Could not read footnotes', error))
+                .finally(() => this._footnoteReads.delete(file.path));
+            this._footnoteReads.set(file.path, read);
+        }
+
+        return new Map();
+    }
+
     handleTagClick(tag, file) {
         const cleanTag = String(tag || '').replace(/^#+/, '').trim();
         if (!cleanTag) return;
@@ -1412,8 +1513,8 @@ class InfoboxPlugin extends Plugin {
         }
     }
 
-    renderInlineText(parent, value, file, component) {
-        const text = this.normalizeInlineValue(value);
+    renderInlineText(parent, value, file, component, footnotes) {
+        const text = this.resolveFootnoteReferences(value, footnotes);
         const sourcePath = file ? file.path : '';
         const comp = component || this;
 
@@ -1450,17 +1551,17 @@ class InfoboxPlugin extends Plugin {
         this.renderInlineTextFallback(parent, text, file);
     }
 
-    createTextDiv(parent, cls, value, file, component) {
-        return this.createTextEl(parent, 'div', cls, value, file, component);
+    createTextDiv(parent, cls, value, file, component, footnotes) {
+        return this.createTextEl(parent, 'div', cls, value, file, component, footnotes);
     }
 
-    createTextEl(parent, tag, cls, value, file, component) {
+    createTextEl(parent, tag, cls, value, file, component, footnotes) {
         const el = parent.createEl(tag, { cls });
-        this.renderInlineText(el, value, file, component);
+        this.renderInlineText(el, value, file, component, footnotes);
         return el;
     }
 
-    renderFieldValue(parent, value, file, component) {
+    renderFieldValue(parent, value, file, component, footnotes) {
         const container = parent.createDiv({ cls: 'infobox-value' });
         const items = extractListItems(value, val => this.normalizeInlineValue(val));
 
@@ -1468,10 +1569,10 @@ class InfoboxPlugin extends Plugin {
             const ul = container.createEl('ul', { cls: 'infobox-list' });
             items.forEach(item => {
                 const li = ul.createEl('li');
-                this.renderInlineText(li, item, file, component);
+                this.renderInlineText(li, item, file, component, footnotes);
             });
         } else {
-            this.renderInlineText(container, items[0] || '', file, component);
+            this.renderInlineText(container, items[0] || '', file, component, footnotes);
         }
     }
 
@@ -1505,6 +1606,7 @@ class InfoboxPlugin extends Plugin {
 
         const ib = fm.infobox;
         const tags = this.getTags(ib, fm, cache);
+        const footnotes = this.getFootnoteDefinitions(file, view, request);
 
         // ── Build panel ──────────────────────────────────────────
         const panel = createDiv({ cls: 'infobox-panel' });
@@ -1630,17 +1732,17 @@ class InfoboxPlugin extends Plugin {
 
         // Supertitle
         if (ib.supertitle) {
-            this.createTextDiv(card, 'infobox-supertitle', ib.supertitle, file, view);
+            this.createTextDiv(card, 'infobox-supertitle', ib.supertitle, file, view, footnotes);
         }
 
         // Title
         if (ib.title) {
-            this.createTextDiv(card, 'infobox-title', ib.title, file, view);
+            this.createTextDiv(card, 'infobox-title', ib.title, file, view, footnotes);
         }
 
         // Subtitle
         if (ib.subtitle) {
-            this.createTextDiv(card, 'infobox-subtitle', ib.subtitle, file, view);
+            this.createTextDiv(card, 'infobox-subtitle', ib.subtitle, file, view, footnotes);
         }
 
         // Image / image gallery
@@ -1717,7 +1819,8 @@ class InfoboxPlugin extends Plugin {
                         caption,
                         entry.caption,
                         file,
-                        view
+                        view,
+                        footnotes
                     );
                 }
                 caption.classList.toggle('is-hidden', !entry.caption);
@@ -1785,11 +1888,11 @@ class InfoboxPlugin extends Plugin {
                 const val = item[key];
 
                 if (key.toLowerCase() === 'section') {
-                    this.createTextDiv(card, 'infobox-section', val, file, view);
+                    this.createTextDiv(card, 'infobox-section', val, file, view, footnotes);
                 } else {
                     const row = card.createDiv({ cls: 'infobox-row' });
-                    this.createTextEl(row, 'span', 'infobox-label', key, file, view);
-                    this.renderFieldValue(row, val, file, view);
+                    this.createTextEl(row, 'span', 'infobox-label', key, file, view, footnotes);
+                    this.renderFieldValue(row, val, file, view, footnotes);
                 }
             }
         }
@@ -1851,3 +1954,4 @@ class InfoboxPlugin extends Plugin {
 }
 
 module.exports = InfoboxPlugin;
+module.exports.extractFootnoteDefinitions = extractFootnoteDefinitions;
