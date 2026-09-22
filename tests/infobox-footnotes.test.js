@@ -61,16 +61,33 @@ test('recognizes rendered footnote links without treating normal anchors as foot
     assert.equal(plugin.isFootnoteLink(normalLink), false);
 });
 
-test('keeps the footnote reference in the Markdown sent to the renderer', () => {
+test('renders a known footnote as explicit superscript link markup', () => {
+    const plugin = new InfoboxPlugin();
+    const definitions = new Map([['1', 'Definition shown in the popup']]);
+
+    const prepared = plugin.prepareFootnoteMarkdown('Source[^1] and [^missing]', definitions);
+
+    assert.match(prepared.markdown, /<sup class="footnote-ref infobox-footnote-ref">/);
+    assert.match(prepared.markdown, /<a href="#fn-1"[^>]*>1<\/a>/);
+    assert.match(prepared.markdown, /\[\^missing\]/);
+    assert.deepEqual(prepared.references, [{
+        label: '1',
+        display: '1',
+        definition: 'Definition shown in the popup'
+    }]);
+});
+
+test('sends explicit footnote link markup to the isolated Markdown renderer', () => {
     const plugin = new InfoboxPlugin();
     let renderedText = null;
     plugin.renderInlineTextFallback = (_parent, text) => { renderedText = text; };
 
     plugin.renderInlineText({}, 'Source[^1]', { path: 'Note.md' }, {}, new Map([
-        ['1', 'Definition that must not replace the reference']
+        ['1', 'Definition shown in the popup']
     ]));
 
-    assert.equal(renderedText, 'Source[^1]');
+    assert.match(renderedText, /<sup class="footnote-ref infobox-footnote-ref">/);
+    assert.match(renderedText, /data-infobox-footnote-index="0"/);
 });
 
 test('adds hover behavior while keeping footnotes out of infobox link navigation', () => {

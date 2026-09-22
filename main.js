@@ -1435,9 +1435,41 @@ class InfoboxPlugin extends Plugin {
         return new Map();
     }
 
+    prepareFootnoteMarkdown(value, definitions) {
+        const text = this.normalizeInlineValue(value);
+        if (!(definitions instanceof Map) || definitions.size === 0) {
+            return { markdown: text, references: [] };
+        }
+
+        const namedNumbers = new Map();
+        let nextNumber = 1;
+        for (const label of definitions.keys()) {
+            if (/^\d+$/.test(label)) continue;
+            namedNumbers.set(label, String(nextNumber++));
+        }
+
+        const references = [];
+        const markdown = text.replace(/\[\^([^\]\r\n]+)\]/g, (reference, rawLabel) => {
+            const label = rawLabel.trim();
+            if (!definitions.has(label)) return reference;
+
+            const display = /^\d+$/.test(label) ? label : (namedNumbers.get(label) || label);
+            const index = references.push({
+                label,
+                display,
+                definition: definitions.get(label)
+            }) - 1;
+
+            return `<sup class="footnote-ref infobox-footnote-ref"><a href="#fn-${display}" data-footnote-ref data-infobox-footnote-index="${index}">${display}</a></sup>`;
+        });
+
+        return { markdown, references };
+    }
+
     isFootnoteLink(link) {
         const href = link?.getAttribute?.('href') || '';
         return Boolean(
+            link?.hasAttribute?.('data-infobox-footnote-index') ||
             link?.hasAttribute?.('data-footnote-ref') ||
             link?.closest?.('.footnote-ref') ||
             /^#fn(?:-|\d)/i.test(href)
@@ -1599,10 +1631,10 @@ class InfoboxPlugin extends Plugin {
     }
 
     renderInlineText(parent, value, file, component, footnotes) {
-        const text = this.normalizeInlineValue(value);
+        const prepared = this.prepareFootnoteMarkdown(value, footnotes);
+        const text = prepared.markdown;
         const sourcePath = file ? file.path : '';
         const comp = component || this;
-        const referenceLabels = Array.from(text.matchAll(/\[\^([^\]\r\n]+)\]/g), match => match[1].trim());
 
         if (typeof MarkdownRenderer !== 'undefined' && (MarkdownRenderer.render || MarkdownRenderer.renderMarkdown)) {
             const temp = createDiv();
@@ -1614,8 +1646,21 @@ class InfoboxPlugin extends Plugin {
                 let footnoteIndex = 0;
                 temp.querySelectorAll('a').forEach(a => {
                     if (this.isFootnoteLink(a)) {
-                        const label = referenceLabels[footnoteIndex++];
-                        this.prepareFootnoteLink(a, label, footnotes?.get(label), file, comp);
+                        const rawIndex = a.getAttribute?.('data-infobox-footnote-index');
+                        const explicitIndex = rawIndex == null || rawIndex === '' ? NaN : Number(rawIndex);
+                        const reference = prepared.references[
+                            Number.isInteger(explicitIndex) ? explicitIndex : footnoteIndex
+                        ];
+                        footnoteIndex++;
+                        if (reference) {
+                            this.prepareFootnoteLink(
+                                a,
+                                reference.label,
+                                reference.definition,
+                                file,
+                                comp
+                            );
+                        }
                     } else {
                         a.classList.add('infobox-link');
                     }
