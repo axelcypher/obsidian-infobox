@@ -11,7 +11,7 @@ An Obsidian plugin that renders Wikipedia-style infoboxes from YAML frontmatter,
 - Drag-and-drop reordering for fields, sections, and tags
 - Smart list formatting: YAML arrays, multiline bullets, pipes (`|`), and commas (`,`) automatically render as bulleted lists
 - Supports internal wikilinks with aliases throughout titles, captions, and fields
-- Resolves footnote references in infobox text to their definitions from the current note
+- Supports clickable footnote references with definition previews on hover
 - Tag integration with add, remove, reorder, and toggle visibility
 - Automatic light/dark theme support
 - Works on desktop and mobile
@@ -102,7 +102,7 @@ Text values in `title`, `subtitle`, `caption`, section headers, field labels, an
 
 An unquoted `[[link]]` is interpreted as a YAML array, and adding text after it makes the YAML invalid. For this specific error, the plugin offers **Add YAML quotes** in place of the infobox. This repairs the values only when the resulting frontmatter parses successfully; it preserves the note body. Other YAML errors must be corrected manually.
 
-Footnote references are resolved from definitions in the same note. This also supports named and multiline footnotes:
+Footnote references use the definitions from the same note. This also supports named and multiline footnotes:
 
 ```yaml
 ---
@@ -114,7 +114,7 @@ infobox:
 [^einstein-source]: Albert Einstein, *Relativity: The Special and General Theory*.
 ```
 
-The infobox displays the definition text instead of only the footnote number. References without a matching definition remain unchanged.
+The infobox displays the usual superscript reference. Clicking it jumps to the footnote in the note, while hovering or focusing it shows the definition in a popup. References without a matching definition remain unchanged.
 
 ### Fields list
 

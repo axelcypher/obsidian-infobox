@@ -232,6 +232,33 @@ ul.infobox-list {
     text-decoration: underline;
 }
 
+.infobox-footnote-link {
+    cursor: pointer;
+}
+
+.infobox-footnote-popover {
+    position: fixed;
+    z-index: var(--layer-popover, 1000);
+    max-width: min(32rem, calc(100vw - 16px));
+    padding: 8px 10px;
+    color: var(--text-normal);
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    box-shadow: var(--shadow-s);
+    font-size: var(--font-ui-small);
+    line-height: var(--line-height-normal);
+    pointer-events: none;
+}
+
+.infobox-footnote-popover > :first-child {
+    margin-top: 0;
+}
+
+.infobox-footnote-popover > :last-child {
+    margin-bottom: 0;
+}
+
 /* ── Multiple image tabs ───────────────────────────────────── */
 
 .infobox-gallery {

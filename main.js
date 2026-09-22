@@ -1296,6 +1296,7 @@ class InfoboxPlugin extends Plugin {
         this._footnoteDefinitions.clear();
         this._footnoteReads.clear();
         if (this._pending != null) cancelAnimationFrame(this._pending);
+        (document.querySelectorAll?.('.infobox-footnote-popover') || []).forEach(e => e.remove());
         document.querySelectorAll('.infobox-panel').forEach(e => e.remove());
         document.querySelectorAll('.has-infobox').forEach(e => e.classList.remove('has-infobox'));
         document.querySelectorAll('.infobox-readable-host').forEach(e => e.classList.remove('infobox-readable-host'));
@@ -1407,16 +1408,6 @@ class InfoboxPlugin extends Plugin {
         return String(value);
     }
 
-    resolveFootnoteReferences(value, definitions) {
-        const text = this.normalizeInlineValue(value);
-        if (!(definitions instanceof Map) || definitions.size === 0) return text;
-
-        return text.replace(/\[\^([^\]\r\n]+)\]/g, (reference, rawLabel) => {
-            const label = rawLabel.trim();
-            return definitions.has(label) ? definitions.get(label) : reference;
-        });
-    }
-
     getFootnoteDefinitions(file, view, request) {
         const editorSource = view?.editor?.getValue?.();
         if (typeof editorSource === 'string') {
@@ -1442,6 +1433,100 @@ class InfoboxPlugin extends Plugin {
         }
 
         return new Map();
+    }
+
+    isFootnoteLink(link) {
+        const href = link?.getAttribute?.('href') || '';
+        return Boolean(
+            link?.hasAttribute?.('data-footnote-ref') ||
+            link?.closest?.('.footnote-ref') ||
+            /^#fn(?:-|\d)/i.test(href)
+        );
+    }
+
+    navigateToFootnote(event, link, label, component) {
+        const href = link?.getAttribute?.('href') || '';
+        const container = component?.containerEl;
+        let target = null;
+
+        if (container?.querySelector && /^#[A-Za-z0-9_-]+$/.test(href)) {
+            target = container.querySelector(href);
+        }
+
+        if (target) {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+            return true;
+        }
+
+        const editor = component?.editor;
+        const source = editor?.getValue?.();
+        if (typeof source === 'string') {
+            const escapedLabel = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = new RegExp(`^ {0,3}\\[\\^${escapedLabel}\\]:`, 'm');
+            const match = pattern.exec(source);
+            if (match) {
+                const line = source.slice(0, match.index).split(/\r\n?|\n/).length - 1;
+                const position = { line, ch: 0 };
+                event?.preventDefault?.();
+                event?.stopPropagation?.();
+                editor.setCursor?.(position);
+                editor.scrollIntoView?.({ from: position, to: position }, true);
+                editor.focus?.();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    prepareFootnoteLink(link, label, definition, file, component) {
+        if (!link || !label || definition == null) return;
+
+        link.classList?.remove('infobox-link');
+        link.classList?.add('infobox-footnote-link');
+        link.setAttribute?.('data-infobox-footnote', label);
+        link.setAttribute?.('aria-label', `Footnote ${label}`);
+
+        let popup = null;
+        const hidePopup = () => {
+            popup?.remove?.();
+            popup = null;
+        };
+        const showPopup = () => {
+            hidePopup();
+            popup = createDiv({
+                cls: 'infobox-footnote-popover',
+                attr: { role: 'tooltip' }
+            });
+            document.body.appendChild(popup);
+            this.renderInlineText(popup, definition, file, component);
+
+            const positionPopup = () => {
+                if (!popup) return;
+                const rect = link.getBoundingClientRect?.();
+                if (!rect || !popup.style) return;
+                const gap = 8;
+                const maxLeft = Math.max(gap, window.innerWidth - popup.offsetWidth - gap);
+                const below = rect.bottom + gap;
+                const top = below + popup.offsetHeight <= window.innerHeight - gap
+                    ? below
+                    : Math.max(gap, rect.top - popup.offsetHeight - gap);
+                popup.style.left = `${Math.min(Math.max(gap, rect.left), maxLeft)}px`;
+                popup.style.top = `${top}px`;
+            };
+            positionPopup();
+            requestAnimationFrame(positionPopup);
+        };
+
+        link.addEventListener?.('mouseenter', showPopup);
+        link.addEventListener?.('mouseleave', hidePopup);
+        link.addEventListener?.('focus', showPopup);
+        link.addEventListener?.('blur', hidePopup);
+        link.addEventListener?.('click', event => {
+            this.navigateToFootnote(event, link, label, component);
+        });
     }
 
     handleTagClick(tag, file) {
@@ -1514,9 +1599,10 @@ class InfoboxPlugin extends Plugin {
     }
 
     renderInlineText(parent, value, file, component, footnotes) {
-        const text = this.resolveFootnoteReferences(value, footnotes);
+        const text = this.normalizeInlineValue(value);
         const sourcePath = file ? file.path : '';
         const comp = component || this;
+        const referenceLabels = Array.from(text.matchAll(/\[\^([^\]\r\n]+)\]/g), match => match[1].trim());
 
         if (typeof MarkdownRenderer !== 'undefined' && (MarkdownRenderer.render || MarkdownRenderer.renderMarkdown)) {
             const temp = createDiv();
@@ -1525,8 +1611,14 @@ class InfoboxPlugin extends Plugin {
                 : MarkdownRenderer.renderMarkdown(text, temp, sourcePath, comp);
 
             const handleRendered = () => {
+                let footnoteIndex = 0;
                 temp.querySelectorAll('a').forEach(a => {
-                    a.classList.add('infobox-link');
+                    if (this.isFootnoteLink(a)) {
+                        const label = referenceLabels[footnoteIndex++];
+                        this.prepareFootnoteLink(a, label, footnotes?.get(label), file, comp);
+                    } else {
+                        a.classList.add('infobox-link');
+                    }
                 });
                 if (temp.childNodes.length === 1 && temp.firstChild.nodeName === 'P') {
                     const p = temp.firstChild;
@@ -1586,6 +1678,7 @@ class InfoboxPlugin extends Plugin {
         this._repairRequests.set(ct, request);
 
         // Always clean up first
+        (document.querySelectorAll?.('.infobox-footnote-popover') || []).forEach(e => e.remove());
         ct.querySelectorAll('.infobox-panel').forEach(e => e.remove());
         ct.classList.remove('has-infobox');
         ct.querySelectorAll('.infobox-readable-host').forEach(e => e.classList.remove('infobox-readable-host'));

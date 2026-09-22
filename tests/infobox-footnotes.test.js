@@ -44,17 +44,77 @@ test('extracts single-line, named, and multiline footnote definitions', () => {
     assert.equal(definitions.has('ignored'), false);
 });
 
-test('resolves known references and preserves unknown references', () => {
+test('recognizes rendered footnote links without treating normal anchors as footnotes', () => {
     const plugin = new InfoboxPlugin();
-    const definitions = new Map([
-        ['1', 'Resolved **content**'],
-        ['source', 'Named source']
-    ]);
+    const footnote = {
+        hasAttribute: name => name === 'data-footnote-ref',
+        getAttribute: () => '#fn-1',
+        closest: () => null
+    };
+    const normalLink = {
+        hasAttribute: () => false,
+        getAttribute: () => 'Notes/Source',
+        closest: () => null
+    };
 
-    assert.equal(
-        plugin.resolveFootnoteReferences('[^1] / [^source] / [^missing]', definitions),
-        'Resolved **content** / Named source / [^missing]'
-    );
+    assert.equal(plugin.isFootnoteLink(footnote), true);
+    assert.equal(plugin.isFootnoteLink(normalLink), false);
+});
+
+test('keeps the footnote reference in the Markdown sent to the renderer', () => {
+    const plugin = new InfoboxPlugin();
+    let renderedText = null;
+    plugin.renderInlineTextFallback = (_parent, text) => { renderedText = text; };
+
+    plugin.renderInlineText({}, 'Source[^1]', { path: 'Note.md' }, {}, new Map([
+        ['1', 'Definition that must not replace the reference']
+    ]));
+
+    assert.equal(renderedText, 'Source[^1]');
+});
+
+test('adds hover behavior while keeping footnotes out of infobox link navigation', () => {
+    const plugin = new InfoboxPlugin();
+    const classes = new Set(['infobox-link']);
+    const attributes = {};
+    const listeners = {};
+    const link = {
+        classList: {
+            add: name => classes.add(name),
+            remove: name => classes.delete(name)
+        },
+        setAttribute: (name, value) => { attributes[name] = value; },
+        addEventListener: (name, handler) => { listeners[name] = handler; }
+    };
+
+    plugin.prepareFootnoteLink(link, '1', 'Source text', { path: 'Note.md' }, {});
+
+    assert.equal(classes.has('infobox-link'), false);
+    assert.equal(classes.has('infobox-footnote-link'), true);
+    assert.equal(attributes['data-infobox-footnote'], '1');
+    assert.equal(typeof listeners.mouseenter, 'function');
+    assert.equal(typeof listeners.focus, 'function');
+    assert.equal(typeof listeners.click, 'function');
+});
+
+test('clicking a footnote reference moves the editor to its definition', () => {
+    const plugin = new InfoboxPlugin();
+    const calls = [];
+    const event = {
+        preventDefault: () => calls.push('preventDefault'),
+        stopPropagation: () => calls.push('stopPropagation')
+    };
+    const link = { getAttribute: () => '#fn-1' };
+    const editor = {
+        getValue: () => 'Text[^1]\n\n[^1]: Source text',
+        setCursor: position => calls.push(['setCursor', position]),
+        scrollIntoView: range => calls.push(['scrollIntoView', range]),
+        focus: () => calls.push('focus')
+    };
+
+    assert.equal(plugin.navigateToFootnote(event, link, '1', { editor }), true);
+    assert.deepEqual(calls[2], ['setCursor', { line: 2, ch: 0 }]);
+    assert.equal(calls.at(-1), 'focus');
 });
 
 test('uses the current editor contents so live-preview footnotes update immediately', () => {
